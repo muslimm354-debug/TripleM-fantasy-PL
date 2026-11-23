@@ -18,11 +18,17 @@ What this approach is good and bad at shapes every decision below, so be honest 
 From the storyboard, take the shot ID, duration, composition, action, camera, lighting and emotional intent. If the project has a production bible (palette hex codes, continuity rules), use it. The palette goes straight into the materials.
 
 ### 2. Install Blender once per container
+**Preferred: the official build from PyPI** (`bpy`, Blender 5.x). It includes OpenImageDenoise, so frames come out clean. download.blender.org is often blocked by the network proxy, but PyPI is allowed. The download is large, so run it as a background task:
 ```bash
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq blender   # Ubuntu ships 4.0.x
-blender --version
+python3 -m venv ~/bpyenv && ~/bpyenv/bin/pip install -q bpy
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libegl1 libgl1 libgles2 libgl1-mesa-dri libvulkan1 mesa-vulkan-drivers
+~/bpyenv/bin/python -c "import bpy; print(bpy.app.version_string)"
 ```
-This build has **no OpenImageDenoise**. Set `sc.cycles.use_denoising = False`, or the render aborts with "Build without OpenImageDenoiser". Denoise in ffmpeg instead (step 6).
+Without the EGL/GL libraries, rendering aborts with `Couldn't open libEGL.so.1`. Run shot scripts with `~/bpyenv/bin/python shot.py -- <args>`.
+
+**Fallback: the Ubuntu apt build** (Blender 4.0, quick to install): `apt-get install -y blender`, then run with `blender -b -P shot.py -- <args>`. It has **no OpenImageDenoise**, so denoising must be off or the render aborts with "Build without OpenImageDenoiser". The template switches this automatically by version, and the ffmpeg step cleans up the noise instead.
+
+The template works on both versions. Blender 5 moved the compositor to `scene.compositing_node_group` and animation curves into layered actions, and the template handles both.
 
 ### 3. Write the shot script
 Copy `scripts/shot_template.py` (a complete, working shot) and replace its scene sections. Keep its structure, because each part solves a real problem:
@@ -36,16 +42,16 @@ Copy `scripts/shot_template.py` (a complete, working shot) and replace its scene
 - **Arguments:** the script reads `-- <out_prefix> [width] [samples] [f0] [f1]`, so the same file serves for test frames and the full render.
 
 ### 4. Test frames before the full render
-Render 2–3 single frames (beginning, middle, end) at width 960 and 32 samples, then look at them with `scripts/contact_sheet.py`:
+Set `BL` to how Blender is run: `BL="$HOME/bpyenv/bin/python"` for the official build, or `BL="blender -b -P"` for apt. Render 2–3 single frames (beginning, middle, end) at width 960 and 32 samples, then look at them with `scripts/contact_sheet.py`:
 ```bash
-mkdir -p test && for f in 30 110 180; do blender -b -P shot.py -- $PWD/test/f_ 960 32 $f $f 2>&1 | grep -E "Error|Traceback"; done
+mkdir -p test && for f in 30 110 180; do $BL shot.py -- $PWD/test/f_ 960 32 $f $f 2>&1 | grep -E "Error|Traceback"; done
 python3 scripts/contact_sheet.py test/sheet.png test/f_0030.png test/f_0110.png test/f_0180.png
 ```
 Look at the sheet yourself. The first renders almost always have one of these problems: too dark, something blocking the view, a hero prop hidden behind the actor, gaps in the walls, or visible lights. Fix and re-test. Writing each test into a fresh folder (`test2/`, `test3/` …) is simpler than deleting files.
 
 ### 5. Full render in the background
 ```bash
-mkdir -p full && blender -b -P shot.py -- $PWD/full/f_ 960 32 1 <last_frame> > full/render.log 2>&1
+mkdir -p full && $BL shot.py -- $PWD/full/f_ 960 32 1 <last_frame> > full/render.log 2>&1
 ```
 Run it as a background task. Tell the user how long it will take, and use the waiting time to prepare the audio.
 
@@ -56,7 +62,7 @@ scripts/assemble.sh full/f_ shot_audio.wav SHOT_ID.mp4 24
 This denoises (hqdn3d), adds a vignette and fine film grain, and muxes the audio. To cut audio for one shot out of a scene track: `ffmpeg -ss <start> -t <dur> -i scene.wav -af "afade=t=in:d=0.3,afade=t=out:st=<dur-0.6>:d=0.6" shot.wav`.
 
 ### 7. Deliver honestly
-Send the MP4. Say what worked and what didn't (usually character quality, noise and darkness), and how long the render took. Then offer next steps: more shots, the hybrid approach (Blender sets plus AI-generated close-ups), or the official Blender build with denoising for cleaner frames.
+Send the MP4. Say what worked and what didn't (usually character quality, noise and darkness), and how long the render took. Then offer next steps: more shots, the hybrid approach (Blender sets plus AI-generated close-ups), or more samples for final quality.
 
 ## References
 - `references/lessons.md`: specific bugs hit while building the first shot and their fixes, plus calibration numbers for lights, timing and samples. Read it before writing a new shot script; it saves several test cycles.

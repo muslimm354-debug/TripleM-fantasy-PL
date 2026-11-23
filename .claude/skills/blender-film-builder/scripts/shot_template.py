@@ -1,6 +1,7 @@
 # TEMPLATE SHOT (worked example): ORIGINS, Shot 8J. Aurel at an open window releases a glowing paper strip into the rain.
 # Copy this file per shot and replace the SET / CHARACTER / HERO PROP / CAMERA sections. Keep the helpers and render settings.
-# Run:  blender -b -P shot_template.py -- <out_prefix> [width] [samples] [frame_start] [frame_end]
+# Run (official build, pip bpy):  python shot_template.py -- <out_prefix> [width] [samples] [frame_start] [frame_end]
+# Run (Ubuntu apt Blender 4.0):  blender -b -P shot_template.py -- <out_prefix> [width] [samples] [frame_start] [frame_end]
 import bpy, math, random, sys
 from mathutils import Vector
 
@@ -11,6 +12,9 @@ SAMPLES = int(argv[2]) if len(argv) > 2 else 24
 F0 = int(argv[3]) if len(argv) > 3 else 1
 F1 = int(argv[4]) if len(argv) > 4 else 192
 random.seed(8)
+import bpy as _b
+# Official builds (Blender 5.x / pip bpy) include OpenImageDenoise; the Ubuntu apt 4.0 build does not.
+DENOISE = _b.app.version >= (4, 2, 0)
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 sc = bpy.context.scene
@@ -204,26 +208,48 @@ cam.keyframe_insert('location', frame=1); cam.keyframe_insert('rotation_euler', 
 cam.location.z += 0.12; cam.location.y += 0.1
 cam.rotation_euler = (Vector((0.5, 3.0, 2.25)) - cam.location).to_track_quat('-Z', 'Y').to_euler()  # tilt up to follow the strip
 cam.keyframe_insert('location', frame=192); cam.keyframe_insert('rotation_euler', frame=192)
-for fc in cam.animation_data.action.fcurves:
+def anim_fcurves(obj):  # Blender 4.x: action.fcurves; Blender 5.x: layered actions (channelbags)
+    a = obj.animation_data.action
+    if hasattr(a, 'fcurves'): return a.fcurves
+    from bpy_extras import anim_utils
+    return anim_utils.action_get_channelbag_for_slot(a, obj.animation_data.action_slot).fcurves
+for fc in anim_fcurves(cam):
     for kp in fc.keyframe_points: kp.interpolation = 'BEZIER'
     n = fc.modifiers.new('NOISE'); n.scale = 40; n.strength = 0.012 if fc.data_path == 'location' else 0.004
 
 # ---------------- render settings ----------------
 r = sc.render; r.engine = 'CYCLES'; sc.cycles.device = 'CPU'; sc.cycles.samples = SAMPLES
-sc.cycles.use_denoising = False; sc.cycles.max_bounces = 4; sc.cycles.transmission_bounces = 4; sc.cycles.use_adaptive_sampling = True; sc.cycles.sample_clamp_indirect = 1.0; sc.cycles.sample_clamp_direct = 8.0
+sc.cycles.use_denoising = DENOISE; sc.cycles.max_bounces = 4; sc.cycles.transmission_bounces = 4; sc.cycles.use_adaptive_sampling = True; sc.cycles.sample_clamp_indirect = 1.0; sc.cycles.sample_clamp_direct = 8.0
 r.resolution_x = RES_X; r.resolution_y = int(RES_X / 2.39) // 2 * 2; r.resolution_percentage = 100
 r.image_settings.file_format = 'PNG'; r.filepath = OUT
-try: sc.view_settings.view_transform = 'AgX'; sc.view_settings.look = 'AgX - Medium High Contrast'
+sc.view_settings.view_transform = 'AgX'
+for look in ('AgX - Medium High Contrast', 'Medium High Contrast'):
+    try: sc.view_settings.look = look; break
+    except Exception: pass
+try: pass
 except Exception: pass
 sc.view_settings.exposure = 1.1
 bpy.context.view_layer.use_pass_mist = True
-sc.use_nodes = True; nt = sc.node_tree; nt.nodes.clear()
-rl = nt.nodes.new('CompositorNodeRLayers'); mix = nt.nodes.new('CompositorNodeMixRGB'); mix.blend_type = 'MIX'
-mix.inputs[2].default_value = hexrgb('#1f2c3c'); gl = nt.nodes.new('CompositorNodeGlare'); gl.glare_type = 'FOG_GLOW'; gl.threshold = 0.9; gl.size = 8
-mf = nt.nodes.new('CompositorNodeMath'); mf.operation = 'MULTIPLY'; mf.inputs[1].default_value = 0.75
-out = nt.nodes.new('CompositorNodeComposite')
-nt.links.new(rl.outputs['Mist'], mf.inputs[0]); nt.links.new(mf.outputs[0], mix.inputs[0]); nt.links.new(rl.outputs['Image'], mix.inputs[1])
-nt.links.new(mix.outputs[0], gl.inputs[0]); nt.links.new(gl.outputs[0], out.inputs[0])
+FOG = hexrgb('#1f2c3c')
+if hasattr(sc, 'compositing_node_group'):  # Blender 5.x compositor
+    nt = bpy.data.node_groups.new('Comp', 'CompositorNodeTree'); sc.compositing_node_group = nt
+    nt.interface.new_socket('Image', in_out='OUTPUT', socket_type='NodeSocketColor')
+    rl = nt.nodes.new('CompositorNodeRLayers')
+    mf = nt.nodes.new('ShaderNodeMath'); mf.operation = 'MULTIPLY'; mf.inputs[1].default_value = 0.75
+    mix = nt.nodes.new('ShaderNodeMix'); mix.data_type = 'RGBA'; mix.inputs[7].default_value = FOG
+    gl = nt.nodes.new('CompositorNodeGlare'); gl.inputs['Type'].default_value = 'Fog Glow'; gl.inputs['Threshold'].default_value = 0.9
+    if 'Size' in gl.inputs: gl.inputs['Size'].default_value = 0.5
+    out = nt.nodes.new('NodeGroupOutput')
+    nt.links.new(rl.outputs['Mist'], mf.inputs[0]); nt.links.new(mf.outputs[0], mix.inputs[0]); nt.links.new(rl.outputs['Image'], mix.inputs[6])
+    nt.links.new(mix.outputs[2], gl.inputs['Image']); nt.links.new(gl.outputs['Image'], out.inputs[0])
+else:  # Blender 4.x compositor
+    sc.use_nodes = True; nt = sc.node_tree; nt.nodes.clear()
+    rl = nt.nodes.new('CompositorNodeRLayers'); mix = nt.nodes.new('CompositorNodeMixRGB'); mix.blend_type = 'MIX'
+    mix.inputs[2].default_value = FOG; gl = nt.nodes.new('CompositorNodeGlare'); gl.glare_type = 'FOG_GLOW'; gl.threshold = 0.9; gl.size = 8
+    mf = nt.nodes.new('CompositorNodeMath'); mf.operation = 'MULTIPLY'; mf.inputs[1].default_value = 0.75
+    out = nt.nodes.new('CompositorNodeComposite')
+    nt.links.new(rl.outputs['Mist'], mf.inputs[0]); nt.links.new(mf.outputs[0], mix.inputs[0]); nt.links.new(rl.outputs['Image'], mix.inputs[1])
+    nt.links.new(mix.outputs[0], gl.inputs[0]); nt.links.new(gl.outputs[0], out.inputs[0])
 
 sc.frame_start, sc.frame_end = F0, F1
 bpy.ops.wm.save_as_mainfile(filepath=OUT.rstrip('/') + '_scene.blend')

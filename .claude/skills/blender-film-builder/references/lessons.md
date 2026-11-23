@@ -3,7 +3,14 @@
 Each item is a real problem that cost a test cycle. Check your script against this list before the first test render.
 
 ## Crashes and setup
-- **"Build without OpenImageDenoiser":** the apt (Ubuntu) build of Blender has no OIDN. Turn Cycles denoising off and denoise with ffmpeg `hqdn3d`. The official blender.org build or the `bpy` pip wheel includes OIDN, but both are large downloads that may time out behind the proxy.
+- **"Build without OpenImageDenoiser":** the apt (Ubuntu) build of Blender has no OIDN. Prefer the official `bpy` wheel from PyPI (Blender 5.3 was tested, with OIDN working). blender.org itself was blocked (403) by the proxy. Install the pip wheel in a background task, because a 60 s timeout is not enough for it.
+- **`Couldn't open libEGL.so.1`, then abort (exit 134)** with the pip `bpy`: install `libegl1 libgl1 libgles2 libgl1-mesa-dri libvulkan1 mesa-vulkan-drivers`. The Vulkan warning that remains is harmless.
+- **Blender 5 API changes** that broke a 4.0 script:
+  - `action.fcurves` is gone, so use `bpy_extras.anim_utils.action_get_channelbag_for_slot(action, obj.animation_data.action_slot).fcurves`.
+  - `scene.node_tree` is gone. The compositor is a `CompositorNodeTree` node group assigned to `scene.compositing_node_group`, with a `NodeGroupOutput` (add an `Image` output socket to its interface).
+  - `CompositorNodeMixRGB`, `CompositorNodeMath` and `CompositorNodeComposite` are gone. Use `ShaderNodeMix` (data_type `RGBA`, colour inputs at index 6 and 7, colour output at index 2) and `ShaderNodeMath`.
+  - Glare options are now input sockets: `gl.inputs['Type'].default_value = 'Fog Glow'`, `gl.inputs['Threshold']`.
+- **Denoising tradeoff:** OIDN gives clean frames at 32 samples, but it smooths fine bump texture (wool, plaster) and makes primitive characters look even more like smooth mannequins. Raise the bump strength or the texture scale if surfaces look plastic.
 - **EEVEE** needs an OpenGL context, so in a headless CPU container use **Cycles**.
 - **Editing scripts with string replacement:** when a replacement splits a line that holds several `;`-separated statements, the next line can end up with a stray leading space, which causes an `IndentationError`. Prefer one statement per line in shot scripts.
 
@@ -33,7 +40,7 @@ The first attempt used a 900 W key and exposure 0.4, and the room came out almos
 - Glass: transmission 1.0, roughness 0.04.
 
 ## Timing (4-core CPU, no GPU)
-- At 960×402 and 32 samples: about 13 s per frame including scene sync (each test frame also pays about 3 s of startup).
+- At 960×402 and 32 samples: about 13 s per frame on apt Blender 4.0 (no denoise), and about 17 s per frame on pip Blender 5.3 with OIDN. Each test frame also pays a few seconds of startup.
 - 8 s at 24 fps (192 frames) took about 40 min. Quote time to the user before full renders, and suggest lower width, lower fps, or fewer shots when the time is too long.
 
 ## Characters
